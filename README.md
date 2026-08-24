@@ -1,10 +1,18 @@
 # Cdev 🚀
 
-A lightweight, persistent, and "one-click" web-based VS Code development environment powered by Docker. Designed for instant spin-ups where your code is mounted directly, and configurations (such as AI agents and extensions) are persistently managed via symbolic links (`ln`).
+## 🛠️ Quick Start
+
+Navigate to your project directory and run the following command to deploy and start your development environment:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ouut/cdev/main/cdev.sh | bash
+```
 
 ---
 
 ## ✨ Features
+
+A lightweight, persistent, and "one-click" web-based VS Code development environment powered by Docker. Designed for instant spin-ups where your code is mounted directly, and configurations (such as AI agents and extensions) are persistently managed via symbolic links (`ln`).
 
 - **One-Click Deployment**: Spin up a fully configured development environment instantly via a single `curl` command.
 - **Symbolic Link Persistence (`ln`)**: AI agent settings, extensions, and configurations inside the container are mapped using symlinks to ensure they survive container recreations.
@@ -50,9 +58,4 @@ Cdev bridges the gap between local filesystem control and remote browser-based d
 
 ---
 
-## 🛠️ Quick Start
 
-Navigate to your project directory and run the following command to deploy and start your development environment:
-
-```bash
-bash <(curl -sSL [https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cdev.sh](https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cdev.sh))
