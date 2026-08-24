@@ -26,5 +26,4 @@ CMD ["code", "serve-web", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--without-connection-token", \
-     "--server-data-dir", "/workspace/.vscode-server-data", \
-     "/workspace"]
+     "--server-data-dir", "/workspace/.vscode-server-data"]
