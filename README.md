@@ -1,105 +1,58 @@
-# Webit - One-Command Web VS Code Server
+# Cdev 🚀
 
-`Webit` is a minimalist tool that allows you to instantly spin up a full-featured VS Code (code-server) development environment in your browser for the current or any specified directory—using just **a single command**.
-
-Works with both **root** and **rootless** Docker, automatically detecting your setup and mapping file permissions correctly.
+A lightweight, persistent, and "one-click" web-based VS Code development environment powered by Docker. Designed for instant spin-ups where your code is mounted directly, and configurations (such as AI agents and extensions) are persistently managed via symbolic links (`ln`).
 
 ---
 
-## 🚀 Quick Start
+## ✨ Features
 
-Navigate to the directory you want to open or serve, and run the following command in your terminal:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/ouut/webit/main/run.sh | bash
-
-```
-
-> *Note: If your default repository branch is `master`, remember to change `main` to `master` in the URL.*
-
-Once fired up, open your browser and go to `http://localhost:8080`. The default password is `cc`.
+- **One-Click Deployment**: Spin up a fully configured development environment instantly via a single `curl` command.
+- **Symbolic Link Persistence (`ln`)**: AI agent settings, extensions, and configurations inside the container are mapped using symlinks to ensure they survive container recreations.
+- **Zero Configuration**: Opens directly into your workspace with no extra setup required.
+- **Session Protection**: Automatically handles `systemd linger` to keep background tasks and servers running even after you close your terminal session.
 
 ---
 
-## ⚙️ Custom Configurations
+## 🧠 How It Works (Architecture & Principles)
 
-You can pass custom arguments to the script using the `bash -s --` suffix to change the port, password, or host directory.
+Cdev bridges the gap between local filesystem control and remote browser-based development through several core mechanisms:
 
-### 1. Modify Port and Password
+1. **Official Microsoft VS Code CLI (`code serve-web`)**:
+   - The Docker image runs the official VS Code CLI in web server mode. This turns VS Code into a robust web application accessible directly via your browser, offering the exact same experience as a native desktop installation.
 
-To run on port `9090` with the password `123456`:
+2. **Host-Container Workspace Binding (`-v "$(pwd)":/workspace`)**:
+   - When you execute the deployment script, your current host directory is mounted directly into the container as `/workspace`. Any code changes you make in the browser instantly reflect on your local host machine.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/ouut/webit/main/run.sh | bash -s -- --port 9090 --password 123456
+3. **Symbolic Link Persistence for AI Agents & Configurations (`ln`)**:
+   - Many AI coding assistants (such as Claude Code, Codex, or custom CLI agents) store their authentication tokens, global settings, or chat histories in default hidden directories within the container's home folder (e.g., `~/.claude`, `~/.config`, or `~/.vscode`). 
+   - Because ephemeral containers lose everything outside of mounted volumes, Cdev uses **symbolic links (`ln -s`)** during container startup to bridge these default paths to your persistent host-backed folder (`/workspace/.vscode-server-data`).
+   - **Examples**:
+     ```bash
+     # 1. Persist VS Code extensions and server data
+     ln -sfn /workspace/.vscode-server-data/extensions /root/.vscode/extensions
 
-```
+     # 2. Persist Claude Code credentials, history, or configurations
+     # (Assuming Claude Code stores its data in ~/.claude or ~/.config/claude)
+     mkdir -p /workspace/.vscode-server-data/claude
+     ln -sfn /workspace/.vscode-server-data/claude /root/.claude
 
-### 2. Specify a Different Directory
+     # 3. Persist other AI CLI tool configs (e.g., Codex / OpenAI CLI tokens)
+     mkdir -p /workspace/.vscode-server-data/codex
+     ln -sfn /workspace/.vscode-server-data/codex /root/.codex
+     ```
+     This ensures that whenever an AI agent saves its login session, API configurations, or cache, it transparently writes directly into your host's project folder (`.vscode-server-data`). If you destroy the container and spin up a fresh one tomorrow, your AI agents will still be logged in and fully configured!
 
-Want to share a directory other than your current one? Use the `--dir` flag with an absolute path:
+4. **Dynamic Naming & Multi-Project Isolation (`cdev-<dirname>`)**:
+   - The script automatically converts your current folder name into a safe, normalized container name (e.g., `cdev-my-awesome-project`). This allows you to run multiple independent Cdev containers simultaneously across different projects without any port conflicts or naming collisions.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/ouut/webit/main/run.sh | bash -s -- --dir /home/user/my-project --port 9000
-
-```
-
----
-
-## 🖥️ Local Management (Download & Run)
-
-You can also download `run.sh` and use it as a local service manager:
-
-```bash
-# Download once
-curl -sSL https://raw.githubusercontent.com/ouut/webit/main/run.sh -o run.sh
-chmod +x run.sh
-
-# Service commands
-./run.sh start             # Start (default port 8080, password cc, current dir)
-./run.sh start --port 9090 --password 123456 --dir /path/to/project
-./run.sh stop              # Stop the container (data preserved)
-./run.sh restart           # Stop and re-create with new config
-./run.sh restart --port 9000
-./run.sh status            # Show container status
-./run.sh logs              # Tail container logs
-./run.sh remove            # Destroy container completely
-
-# Just run it without downloading
-./run.sh                   # Same as './run.sh start'
-```
+5. **Systemd Linger Protection (`loginctl enable-linger`)**:
+   - In standard Linux environments, when you log out of an SSH or terminal session, `systemd` terminates all background processes associated with that user. Cdev checks and enables `systemd linger` to ensure that your background tasks, development servers, and container processes remain alive and uninterrupted.
 
 ---
 
-## 🛑 Stop and Resume
+## 🛠️ Quick Start
 
-The container is **persistent** — stopping it won't destroy your environment or config:
-
-```bash
-# Using the script (recommended)
-./run.sh stop
-./run.sh start             # Resume where you left off
-
-# Or raw docker commands
-docker stop web-ide
-docker start web-ide
-```
-
-To fully destroy the container and all its data:
+Navigate to your project directory and run the following command to deploy and start your development environment:
 
 ```bash
-./run.sh remove
-# or: docker stop web-ide && docker rm web-ide
-```
-
----
-
-## 🔒 Permissions & Safety
-
-The script automatically detects your Docker setup and applies the correct user mapping:
-
-| Docker Mode | Strategy | Result |
-|---|---|---|
-| **rootless** | Runs as container root (`--user 0:0`) | Rootless maps it to your host user — files belong to **you** |
-| **root** | Runs with your host UID/GID (`--user $UID:$GID`) | Files belong to **you**, never to host root |
-
-This ensures that any files created or modified inside the Web IDE will belong entirely to your local user, **completely avoiding annoying `root` permission locks**.
+bash <(curl -sSL [https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cdev.sh](https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cdev.sh))
