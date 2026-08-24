@@ -19,6 +19,8 @@ CONTAINER_NAME="cdev-$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed 's/[
 # 3. Clean up any existing container with the same name to avoid naming conflicts
 # docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
 
+docker pull chet2026/cdev:latest
+
 # 4. Run the container (uses the built-in CMD from the Dockerfile; data persists in the current directory)
 docker run -d \
   --name "${CONTAINER_NAME}" \
