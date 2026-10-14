@@ -28,7 +28,12 @@ RUN ARCH="" \
             *) echo "Unsupported uname: $(uname -m)" && exit 1 ;; \
         esac; \
     fi \
-    && curl -sSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-${ARCH}" -o vscode_cli.tar.gz \
+    && ( \
+        curl -fSL --http1.1 -A "Mozilla/5.0" --retry 5 --retry-delay 2 \
+             "https://update.code.visualstudio.com/latest/cli-alpine-${ARCH}/stable" -o vscode_cli.tar.gz || \
+        curl -fSL --http1.1 -A "Mozilla/5.0" --retry 5 --retry-delay 2 \
+             "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-${ARCH}" -o vscode_cli.tar.gz \
+    ) \
     && tar -xzf vscode_cli.tar.gz \
     && mv code /usr/local/bin/ \
     && rm vscode_cli.tar.gz
