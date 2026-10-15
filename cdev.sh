@@ -1,76 +1,269 @@
 #!/usr/bin/env bash
+# ==============================================================================
+# Cdev - Universal Development Environment Launcher
+# Cross-Platform Support for macOS (Apple Silicon & Intel) and Linux (x86_64 & ARM64)
+# ==============================================================================
 set -e
+
+# --- 1. 配置参数与参数解析 ---
+IMAGE="chet2026/cdev:latest"
+DEFAULT_PORT=8080
+PORT="${CDEV_PORT:-$DEFAULT_PORT}"
+FORCE_RECREATE=false
+ACTION="run"
+
+for arg in "$@"; do
+    case "$arg" in
+        --restart|--force|-f)
+            FORCE_RECREATE=true
+            ;;
+        stop)
+            ACTION="stop"
+            ;;
+        status)
+            ACTION="status"
+            ;;
+        --help|-h)
+            echo "Cdev Launcher - Usage:"
+            echo "  ./cdev.sh             Start or resume Cdev in the current workspace"
+            echo "  ./cdev.sh --restart   Force recreation of the container"
+            echo "  ./cdev.sh stop        Stop the current workspace container"
+            echo "  ./cdev.sh status      Check container status"
+            echo ""
+            echo "Environment Variables:"
+            echo "  CDEV_PORT             Port to listen on (default: 8080)"
+            exit 0
+            ;;
+    esac
+done
 
 echo "------------------------------------------------"
 echo "🚀 Initializing Cdev Development Environment..."
 echo "------------------------------------------------"
 
-# 1. Ensure systemd linger is enabled (Linux only)
-if command -v loginctl >/dev/null 2>&1; then
-    loginctl enable-linger "$(whoami)" 2>/dev/null || {
-        echo "🔒 Administrator privileges required to enable background lingering. Please enter your sudo password:"
-        sudo loginctl enable-linger "$(whoami)"
-    }
+# --- 2. 跨平台容器名生成 (安全兼容中文、空格、特殊字符) ---
+get_dir_hash() {
+    printf '%s' "$(pwd)" | (md5sum 2>/dev/null || md5 -q 2>/dev/null || shasum 2>/dev/null || echo "000000") | cut -c1-6
+}
+
+RAW_DIR_NAME="$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g' | sed -E 's/^-+|-+$//g')"
+[ -z "$RAW_DIR_NAME" ] && RAW_DIR_NAME="workspace"
+DIR_HASH="$(get_dir_hash)"
+CONTAINER_NAME="cdev-${RAW_DIR_NAME}-${DIR_HASH}"
+
+# --- 3. Linux 专用优化：systemd linger 保活支持 ---
+if [[ "$(uname -s)" == "Linux" ]] && command -v loginctl >/dev/null 2>&1; then
+    CURRENT_USER="$(whoami)"
+    if ! loginctl show-user "$CURRENT_USER" 2>/dev/null | grep -q "Linger=yes"; then
+        loginctl enable-linger "$CURRENT_USER" 2>/dev/null || true
+    fi
 fi
 
-# 2. Automatically generate a safe container name from the current directory
-CONTAINER_NAME="cdev-$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g')"
-IMAGE="chet2026/cdev:latest"
-
-# 3. Detect container engine (Prioritize Apple native 'container' CLI on macOS, fallback to docker)
-if [[ "$(uname)" == "Darwin" ]] && command -v container >/dev/null 2>&1; then
-    ENGINE="apple-container"
-    echo "🍏 Using Apple Silicon native container engine ('container')..."
-    
-    # Ensure container system service is running
-    if ! container system status >/dev/null 2>&1; then
-        echo "⚙️ Starting Apple container system services..."
-        container system start --enable-kernel-install || true
+# --- 4. 跨平台容器引擎自适应探测 (Apple container / Docker / Podman) ---
+detect_engine() {
+    # 策略 A: macOS 且安装了 Apple 原生 container CLI
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v container >/dev/null 2>&1; then
+        if container system status >/dev/null 2>&1 || container --version >/dev/null 2>&1; then
+            ENGINE="apple-container"
+            CMD_RUN="container"
+            return 0
+        fi
     fi
 
-    echo "📦 Pulling image using Apple container..."
+    # 策略 B: 标准 Docker (免 sudo)
+    if command -v docker >/dev/null 2>&1; then
+        if docker info >/dev/null 2>&1; then
+            ENGINE="docker"
+            CMD_RUN="docker"
+            return 0
+        fi
+        # 策略 C: Linux 下普通用户未加入 docker 组时自动尝试 sudo docker
+        if [[ "$(uname -s)" == "Linux" ]] && command -v sudo >/dev/null 2>&1; then
+            if sudo docker info >/dev/null 2>&1; then
+                ENGINE="docker"
+                CMD_RUN="sudo docker"
+                return 0
+            fi
+        fi
+    fi
+
+    # 策略 D: Podman (Linux/macOS 常见无守护进程替代)
+    if command -v podman >/dev/null 2>&1; then
+        if podman info >/dev/null 2>&1; then
+            ENGINE="podman"
+            CMD_RUN="podman"
+            return 0
+        fi
+    fi
+
+    # 若检测到已安装对应命令但后台服务未运行，给出精准提示与启动尝试
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v container >/dev/null 2>&1; then
+        echo "⚙️ Apple native 'container' service is not running. Starting services..."
+        container system start --enable-kernel-install 2>/dev/null || true
+        if container system status >/dev/null 2>&1; then
+            ENGINE="apple-container"
+            CMD_RUN="container"
+            return 0
+        fi
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        echo "⚠️ Docker daemon is not responding."
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            echo "👉 If using Docker Desktop, please ensure it is opened: open -a Docker"
+            echo "👉 If using Colima, please run: colima start"
+        else
+            echo "👉 On Linux, please run: sudo systemctl start docker"
+            echo "👉 And ensure your user is in the docker group: sudo usermod -aG docker \$USER"
+        fi
+        exit 1
+    fi
+
+    echo "❌ Error: No supported container engine found (Docker, Apple container, or Podman)."
+    echo "   Please install Docker (https://docker.com) or Apple container (https://github.com/apple/container)."
+    exit 1
+}
+
+detect_engine
+
+# --- 5. 处理辅助命令: stop / status ---
+if [ "$ACTION" = "stop" ]; then
+    echo "🛑 Stopping container ${CONTAINER_NAME}..."
+    $CMD_RUN stop "${CONTAINER_NAME}" 2>/dev/null || true
+    echo "✅ Container stopped."
+    exit 0
+fi
+
+if [ "$ACTION" = "status" ]; then
+    echo "🔍 Container Status for ${CONTAINER_NAME}:"
+    $CMD_RUN ps -a --filter "name=^/${CONTAINER_NAME}$" 2>/dev/null || $CMD_RUN ps -a 2>/dev/null | grep "${CONTAINER_NAME}" || echo "Not found."
+    exit 0
+fi
+
+# --- 6. 容器状态检查与幂等性保证 ---
+is_container_running() {
+    if [ "$ENGINE" = "apple-container" ]; then
+        container list 2>/dev/null | grep -q "${CONTAINER_NAME}"
+    else
+        $CMD_RUN ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"
+    fi
+}
+
+is_container_exists() {
+    if [ "$ENGINE" = "apple-container" ]; then
+        container list -a 2>/dev/null | grep -q "${CONTAINER_NAME}"
+    else
+        $CMD_RUN ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"
+    fi
+}
+
+# 如果容器已经在运行，且未要求强行重建
+if is_container_running && [ "$FORCE_RECREATE" = false ]; then
+    echo "ℹ️ Container [${CONTAINER_NAME}] is already up and running!"
+    echo "------------------------------------------------"
+    echo "📂 Workspace: $(pwd)"
+    echo "🌐 Access URL: http://localhost:${PORT}/?folder=/workspace"
+    echo "------------------------------------------------"
+    echo "💡 Tip: To recreate the container, run: ./cdev.sh --restart"
+    
+    # 自动唤起浏览器
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+        open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    elif command -v xdg-open >/dev/null 2>&1 && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
+        xdg-open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    fi
+    exit 0
+fi
+
+# 如果容器存在但处于停止状态，且未要求重建，直接拉起
+if is_container_exists && [ "$FORCE_RECREATE" = false ]; then
+    echo "🔄 Container exists in stopped state. Starting container [${CONTAINER_NAME}]..."
+    $CMD_RUN start "${CONTAINER_NAME}"
+    echo "------------------------------------------------"
+    echo "✅ Cdev resumed successfully via ${ENGINE}!"
+    echo "📂 Workspace: $(pwd)"
+    echo "🌐 Access URL: http://localhost:${PORT}/?folder=/workspace"
+    echo "------------------------------------------------"
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+        open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    elif command -v xdg-open >/dev/null 2>&1 && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
+        xdg-open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    fi
+    exit 0
+fi
+
+# --- 7. 端口空闲检查与自动规避 ---
+is_port_in_use() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -i ":${port}" >/dev/null 2>&1
+    elif command -v ss >/dev/null 2>&1; then
+        ss -tuln | grep -q ":${port} "
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tuln 2>/dev/null | grep -q ":${port} "
+    else
+        return 1
+    fi
+}
+
+ORIGINAL_PORT=$PORT
+while is_port_in_use "$PORT"; do
+    echo "⚠️ Port ${PORT} is currently in use."
+    PORT=$((PORT + 1))
+    echo "👉 Auto-shifting to next free port: ${PORT}..."
+    if [ $((PORT - ORIGINAL_PORT)) -gt 10 ]; then
+        echo "❌ Error: Could not find an available port in range ${ORIGINAL_PORT}-$((PORT)). Please set CDEV_PORT."
+        exit 1
+    fi
+done
+
+# --- 8. 镜像拉取与启动 ---
+echo "📦 Pulling latest image: ${IMAGE}..."
+if [ "$ENGINE" = "apple-container" ]; then
     container image pull "${IMAGE}" 2>/dev/null || container pull "${IMAGE}"
+else
+    $CMD_RUN pull "${IMAGE}"
+fi
 
-    echo "🧹 Cleaning up any existing container with name ${CONTAINER_NAME}..."
-    container rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+# 清理旧同名容器
+if is_container_exists; then
+    echo "🧹 Removing old container instance [${CONTAINER_NAME}]..."
+    $CMD_RUN rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+fi
 
-    echo "🚀 Starting container with Apple native micro-VM..."
+echo "🚀 Starting development container..."
+if [ "$ENGINE" = "apple-container" ]; then
+    # Apple container 运行语法
     container run -d \
       --name "${CONTAINER_NAME}" \
-      -p 8080:8000 \
+      -p "${PORT}:8000" \
       -v "$(pwd)":/workspace \
       "${IMAGE}"
-elif command -v docker >/dev/null 2>&1; then
-    ENGINE="docker"
-    echo "🐳 Using Docker container engine..."
-    
-    echo "📦 Pulling image..."
-    docker pull "${IMAGE}"
-
-    echo "🧹 Cleaning up any existing container with name ${CONTAINER_NAME}..."
-    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
-
-    echo "🚀 Starting Docker container..."
-    docker run -d \
+else
+    # Docker / Podman 运行语法 (Linux/macOS 通用)
+    $CMD_RUN run -d \
       --name "${CONTAINER_NAME}" \
-      -p 8080:8000 \
+      -p "${PORT}:8000" \
       -v "$(pwd)":/workspace \
       --restart unless-stopped \
       "${IMAGE}"
-else
-    echo "❌ Error: Neither Apple 'container' CLI nor Docker was found!"
-    echo "   Please install Apple container (https://github.com/apple/container) or Docker."
-    exit 1
 fi
 
+# --- 9. 运行成功提示与自动打开浏览器 ---
 echo "------------------------------------------------"
 echo "✅ Cdev started successfully via ${ENGINE}!"
 echo "📂 Current Workspace: $(pwd)"
 echo "🌐 Access URL (Click to open directly):"
-echo "  http://localhost:8080/?folder=/workspace "
+echo "  http://localhost:${PORT}/?folder=/workspace "
 echo "------------------------------------------------"
 
-# Automatically open browser on macOS
-if command -v open >/dev/null 2>&1; then
-    open "http://localhost:8080/?folder=/workspace" 2>/dev/null || true
+# 跨平台自动打开浏览器 (SSH/无头服务器静默跳过)
+if [ -z "$SSH_CLIENT" ] && [ -z "$SSH_TTY" ] && [ -z "$SSH_CONNECTION" ]; then
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+        open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    elif command -v xdg-open >/dev/null 2>&1 && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
+        xdg-open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    elif command -v wslview >/dev/null 2>&1; then
+        wslview "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
+    fi
 fi
