@@ -225,6 +225,18 @@ else
     $CMD_RUN pull "${IMAGE}"
 fi
 
+# 初始化持久化 /root 目录（首次运行自动从镜像提取默认配置到宿主机）
+HOST_ROOT_DIR="$(pwd)/.vscode-server-data/root"
+if [ ! -d "$HOST_ROOT_DIR" ] || [ -z "$(ls -A "$HOST_ROOT_DIR" 2>/dev/null)" ]; then
+    echo "📦 Initializing /root configuration to host (${HOST_ROOT_DIR})..."
+    mkdir -p "$HOST_ROOT_DIR"
+    TEMP_CID=$($CMD_RUN create "${IMAGE}" 2>/dev/null | tail -n 1 || true)
+    if [ -n "$TEMP_CID" ]; then
+        $CMD_RUN cp "${TEMP_CID}:/root/." "$HOST_ROOT_DIR/" 2>/dev/null || true
+        $CMD_RUN rm -f "${TEMP_CID}" >/dev/null 2>&1 || true
+    fi
+fi
+
 # 清理旧同名容器
 if is_container_exists; then
     echo "🧹 Removing old container instance [${CONTAINER_NAME}]..."
@@ -236,8 +248,12 @@ if [ "$ENGINE" = "apple-container" ]; then
     # Apple container 运行语法
     container run -d \
       --name "${CONTAINER_NAME}" \
+      --cpus 6 \
+      --memory 10g \
+      -e CARGO_BUILD_JOBS=4 \
       -p "${PORT}:8000" \
       -v "$(pwd)":/workspace \
+      -v "${HOST_ROOT_DIR}":/root \
       "${IMAGE}"
 else
     # Docker / Podman 运行语法 (Linux/macOS 通用)
@@ -245,6 +261,7 @@ else
       --name "${CONTAINER_NAME}" \
       -p "${PORT}:8000" \
       -v "$(pwd)":/workspace \
+      -v "${HOST_ROOT_DIR}":/root \
       --restart unless-stopped \
       "${IMAGE}"
 fi

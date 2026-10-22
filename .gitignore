@@ -1,0 +1,6 @@
+# Cdev persistent data
+.vscode-server-data/
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
