@@ -210,9 +210,12 @@ ORIGINAL_PORT=$PORT
 while is_port_in_use "$PORT"; do
     echo "⚠️ Port ${PORT} is currently in use."
     PORT=$((PORT + 1))
+    if [ "$PORT" -ge 8081 ] && [ "$PORT" -le 8089 ]; then
+        PORT=8090
+    fi
     echo "👉 Auto-shifting to next free port: ${PORT}..."
-    if [ $((PORT - ORIGINAL_PORT)) -gt 10 ]; then
-        echo "❌ Error: Could not find an available port in range ${ORIGINAL_PORT}-$((PORT)). Please set CDEV_PORT."
+    if [ $((PORT - ORIGINAL_PORT)) -gt 20 ]; then
+        echo "❌ Error: Could not find an available port. Please set CDEV_PORT."
         exit 1
     fi
 done
@@ -252,6 +255,15 @@ if [ "$ENGINE" = "apple-container" ]; then
       --memory 10g \
       -e CARGO_BUILD_JOBS=4 \
       -p "${PORT}:8000" \
+      -p 8081:8081 \
+      -p 8082:8082 \
+      -p 8083:8083 \
+      -p 8084:8084 \
+      -p 8085:8085 \
+      -p 8086:8086 \
+      -p 8087:8087 \
+      -p 8088:8088 \
+      -p 8089:8089 \
       -v "$(pwd)":/workspace \
       -v "${HOST_ROOT_DIR}":/root \
       "${IMAGE}"
@@ -260,6 +272,15 @@ else
     $CMD_RUN run -d \
       --name "${CONTAINER_NAME}" \
       -p "${PORT}:8000" \
+      -p 8081:8081 \
+      -p 8082:8082 \
+      -p 8083:8083 \
+      -p 8084:8084 \
+      -p 8085:8085 \
+      -p 8086:8086 \
+      -p 8087:8087 \
+      -p 8088:8088 \
+      -p 8089:8089 \
       -v "$(pwd)":/workspace \
       -v "${HOST_ROOT_DIR}":/root \
       --restart unless-stopped \
@@ -272,6 +293,7 @@ echo "✅ Cdev started successfully via ${ENGINE}!"
 echo "📂 Current Workspace: $(pwd)"
 echo "🌐 Access URL (Click to open directly):"
 echo "  http://localhost:${PORT}/?folder=/workspace "
+echo "🔌 Debug Ports: 8081-8089 mapped to container"
 echo "------------------------------------------------"
 
 # 跨平台自动打开浏览器 (SSH/无头服务器静默跳过)
