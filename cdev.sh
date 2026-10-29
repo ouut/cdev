@@ -252,7 +252,7 @@ if [ "$ENGINE" = "apple-container" ]; then
     container run -d \
       --name "${CONTAINER_NAME}" \
       --cpus 6 \
-      --memory 10g \
+      --memory 16g \
       -e CARGO_BUILD_JOBS=4 \
       -p "${PORT}:8000" \
       -p 8081:8081 \
