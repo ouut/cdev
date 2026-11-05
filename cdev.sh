@@ -9,6 +9,8 @@ set -e
 IMAGE="chet2026/cdev:latest"
 DEFAULT_PORT=8080
 PORT="${CDEV_PORT:-$DEFAULT_PORT}"
+DEFAULT_SSH_PORT=2222
+SSH_PORT="${CDEV_SSH_PORT:-$DEFAULT_SSH_PORT}"
 FORCE_RECREATE=false
 ACTION="run"
 
@@ -31,7 +33,8 @@ for arg in "$@"; do
             echo "  ./cdev.sh status      Check container status"
             echo ""
             echo "Environment Variables:"
-            echo "  CDEV_PORT             Port to listen on (default: 8080)"
+            echo "  CDEV_PORT             Web IDE port to listen on (default: 8080)"
+            echo "  CDEV_SSH_PORT         SSH port to listen on (default: 2222)"
             exit 0
             ;;
     esac
@@ -157,13 +160,25 @@ is_container_exists() {
     fi
 }
 
+show_access_info() {
+    echo "------------------------------------------------"
+    echo "📂 Workspace: $(pwd)"
+    echo ""
+    echo "🌐 方式 1 [浏览器 Web IDE]:"
+    echo "   http://localhost:${PORT}/?folder=/workspace"
+    echo ""
+    echo "💻 方式 2 [本地 VS Code 桌面版 SSH 直连]:"
+    echo "   快捷打开: code --folder-uri \"vscode-remote://ssh-remote+root@localhost:${SSH_PORT}/workspace\""
+    echo "   终端连接: ssh -p ${SSH_PORT} root@localhost (免密登录，备用密码: root)"
+    echo ""
+    echo "🔌 调试端口: 8081-8089 已映射到容器"
+    echo "------------------------------------------------"
+}
+
 # 如果容器已经在运行，且未要求强行重建
 if is_container_running && [ "$FORCE_RECREATE" = false ]; then
     echo "ℹ️ Container [${CONTAINER_NAME}] is already up and running!"
-    echo "------------------------------------------------"
-    echo "📂 Workspace: $(pwd)"
-    echo "🌐 Access URL: http://localhost:${PORT}/?folder=/workspace"
-    echo "------------------------------------------------"
+    show_access_info
     echo "💡 Tip: To recreate the container, run: ./cdev.sh --restart"
     
     # 自动唤起浏览器
@@ -179,11 +194,8 @@ fi
 if is_container_exists && [ "$FORCE_RECREATE" = false ]; then
     echo "🔄 Container exists in stopped state. Starting container [${CONTAINER_NAME}]..."
     $CMD_RUN start "${CONTAINER_NAME}"
-    echo "------------------------------------------------"
     echo "✅ Cdev resumed successfully via ${ENGINE}!"
-    echo "📂 Workspace: $(pwd)"
-    echo "🌐 Access URL: http://localhost:${PORT}/?folder=/workspace"
-    echo "------------------------------------------------"
+    show_access_info
     if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
         open "http://localhost:${PORT}/?folder=/workspace" 2>/dev/null || true
     elif command -v xdg-open >/dev/null 2>&1 && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
@@ -220,6 +232,17 @@ while is_port_in_use "$PORT"; do
     fi
 done
 
+ORIGINAL_SSH_PORT=$SSH_PORT
+while is_port_in_use "$SSH_PORT"; do
+    echo "⚠️ SSH Port ${SSH_PORT} is currently in use."
+    SSH_PORT=$((SSH_PORT + 1))
+    echo "👉 Auto-shifting SSH to next free port: ${SSH_PORT}..."
+    if [ $((SSH_PORT - ORIGINAL_SSH_PORT)) -gt 20 ]; then
+        echo "❌ Error: Could not find an available SSH port. Please set CDEV_SSH_PORT."
+        exit 1
+    fi
+done
+
 # --- 8. 镜像拉取与启动 ---
 echo "📦 Pulling latest image: ${IMAGE}..."
 if [ "$ENGINE" = "apple-container" ]; then
@@ -240,6 +263,37 @@ if [ ! -d "$HOST_ROOT_DIR" ] || [ -z "$(ls -A "$HOST_ROOT_DIR" 2>/dev/null)" ]; 
     fi
 fi
 
+# 自动同步宿主机公钥到容器 authorized_keys (实现本地 VS Code / 终端无密码直连)
+mkdir -p "${HOST_ROOT_DIR}/.ssh"
+chmod 700 "${HOST_ROOT_DIR}/.ssh" 2>/dev/null || true
+
+PUB_KEY=""
+for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+    if [ -f "$k" ]; then
+        PUB_KEY="$k"
+        break
+    fi
+done
+
+if [ -z "$PUB_KEY" ]; then
+    echo "🔑 No SSH public key found on host. Generating ~/.ssh/id_ed25519..."
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh" 2>/dev/null || true
+    ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" -C "cdev-local" >/dev/null 2>&1 || true
+    PUB_KEY="$HOME/.ssh/id_ed25519.pub"
+fi
+
+if [ -f "$PUB_KEY" ]; then
+    PUB_CONTENT="$(cat "$PUB_KEY")"
+    AUTH_KEYS="${HOST_ROOT_DIR}/.ssh/authorized_keys"
+    touch "$AUTH_KEYS"
+    chmod 600 "$AUTH_KEYS" 2>/dev/null || true
+    if ! grep -Fxq "$PUB_CONTENT" "$AUTH_KEYS" 2>/dev/null; then
+        echo "$PUB_CONTENT" >> "$AUTH_KEYS"
+        echo "🔑 Injected host public key ($(basename "$PUB_KEY")) into container."
+    fi
+fi
+
 # 清理旧同名容器
 if is_container_exists; then
     echo "🧹 Removing old container instance [${CONTAINER_NAME}]..."
@@ -255,6 +309,7 @@ if [ "$ENGINE" = "apple-container" ]; then
       --memory 16g \
       -e CARGO_BUILD_JOBS=4 \
       -p "${PORT}:8000" \
+      -p "${SSH_PORT}:22" \
       -p 8081:8081 \
       -p 8082:8082 \
       -p 8083:8083 \
@@ -272,6 +327,7 @@ else
     $CMD_RUN run -d \
       --name "${CONTAINER_NAME}" \
       -p "${PORT}:8000" \
+      -p "${SSH_PORT}:22" \
       -p 8081:8081 \
       -p 8082:8082 \
       -p 8083:8083 \
@@ -288,13 +344,8 @@ else
 fi
 
 # --- 9. 运行成功提示与自动打开浏览器 ---
-echo "------------------------------------------------"
 echo "✅ Cdev started successfully via ${ENGINE}!"
-echo "📂 Current Workspace: $(pwd)"
-echo "🌐 Access URL (Click to open directly):"
-echo "  http://localhost:${PORT}/?folder=/workspace "
-echo "🔌 Debug Ports: 8081-8089 mapped to container"
-echo "------------------------------------------------"
+show_access_info
 
 # 跨平台自动打开浏览器 (SSH/无头服务器静默跳过)
 if [ -z "$SSH_CLIENT" ] && [ -z "$SSH_TTY" ] && [ -z "$SSH_CONNECTION" ]; then

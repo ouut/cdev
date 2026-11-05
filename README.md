@@ -14,6 +14,8 @@ curl -sSL https://raw.githubusercontent.com/ouut/cdev/main/cdev.sh | bash
 
 A lightweight, persistent, and "one-click" web-based VS Code development environment powered by Docker. Designed for instant spin-ups where your code is mounted directly, and user environments and configurations (such as AI agents, shell profiles, and extensions) are persistently managed automatically.
 
+- **Dual Access Modes**: Seamlessly switch between zero-install **Browser Web IDE** and native **Local VS Code Desktop via SSH** (`Remote - SSH`).
+- **Auto SSH Key Sync**: Automatically synchronizes your host's SSH public key for instant password-free desktop VS Code access (with fallback root password `root`).
 - **One-Click Deployment**: Spin up a fully configured development environment instantly via a single `curl` command.
 - **Automatic Home Persistence**: Container `/root` is mapped and initialized to `.vscode-server-data/root`, preserving shell configs, tool settings, and AI agent sessions seamlessly.
 - **Zero Configuration**: Opens directly into your workspace with no extra setup required.

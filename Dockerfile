@@ -8,9 +8,17 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     git \
     sudo \
+    openssh-server \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# 配置 SSH Server：允许 root 登录、密码认证 (默认 root:root) 与公钥认证
+RUN mkdir -p /var/run/sshd \
+    && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+    && echo 'root:root' | chpasswd
 
 ARG TARGETARCH
 
@@ -41,9 +49,14 @@ RUN ARCH="" \
 
 RUN mkdir -p /workspace/.vscode-server-data
 
-EXPOSE 8000
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 8000 22
 
 WORKDIR /workspace
+
+ENTRYPOINT ["entrypoint.sh"]
 
 CMD ["code", "serve-web", \
      "--host", "0.0.0.0", \
